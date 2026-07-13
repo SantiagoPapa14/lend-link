@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::block::{ClaimBlock, Hash};
+use crate::data::save;
 
 #[derive(Serialize, Deserialize)]
 pub struct ChainLink {
@@ -85,6 +86,11 @@ impl ClaimChain {
                     self.orphans_by_parent
                         .insert(claim.previous_hash.clone().unwrap(), to_append);
                 }
+
+                let res = save(&claim);
+                if res.is_err() {
+                    return Err("Failed to save claim".to_string());
+                }
                 return Ok(());
             }
 
@@ -99,6 +105,10 @@ impl ClaimChain {
             self.links.insert(claim_hash.clone(), link);
             self.reprocess_orphans_by_parent(claim_hash);
 
+            let res = save(&claim);
+            if res.is_err() {
+                return Err("Failed to save claim".to_string());
+            }
             Ok(())
         } else {
             if !claim.validate() {
@@ -111,10 +121,14 @@ impl ClaimChain {
             self.genesis = Some(claim.hash.clone());
             let link = ChainLink {
                 depth: 0,
-                block: claim,
+                block: claim.clone(),
                 children: Vec::new(),
             };
             self.links.insert(claim_hash.clone(), link);
+            let res = save(&claim);
+            if res.is_err() {
+                return Err("Failed to save claim".to_string());
+            }
             Ok(())
         }
     }
@@ -154,6 +168,7 @@ mod tests {
         let signing_key = match claim.issuer {
             Issuer::Lender => lender_private,
             Issuer::Borrower => borrower_private,
+            Issuer::Genesis => borrower_private,
         };
         let signature = crypto::sign_message(signing_key, hash.as_bytes());
 

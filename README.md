@@ -4,7 +4,7 @@ The main idea is that each node represents a user, where both messages between n
 The chain consists of two main subchains, a chain of claims and a chain of debts.
 
 ## Accounts
-A pair of keys is generated using {TO BE DEFINED} algorithm. 
+A pair of keys is generated using ed25519 algorithm. 
 - The public key, encoded as hex, represents the account address.
 - The private key is used to sign messages, claims and debts.
 
@@ -21,7 +21,7 @@ A claim is created and signed by ONE of the two users. The fields are as follows
 {
     "previous_hash": string,
     "hash": string,
-    "issuer": 'borrower' | 'lender',
+    "issuer": 'borrower' | 'lender' | 'genesis',
     "lender": string,
     "borrower": string,
     "amount": int,
@@ -63,7 +63,7 @@ the private key of the other account. They can only issue claims that will never
 both chains are ALWAYS valid.
 
 Blocks form a **tree** — each block references a single parent via `previous_hash`, but multiple blocks
-may share the same parent, creating branches. No block is ever discarded.
+may share the same parent, creating branches. *No block is ever discarded.
 
 Each tree independently follows the **longest path from its own genesis** to determine the tip for attaching new blocks. Shorter branches are
 preserved in the tree and may become the longest if extended in the future. When two branches are equal
@@ -74,6 +74,7 @@ Conditions for a block to be valid:
 - In case of a claim, the issuer signature must be valid.
 - In case of a debt, both signatures must be valid.
 - The `previous_hash` must reference a block that exists in the corresponding tree (claim tree for claim blocks, debt tree for debt blocks).
+    - Yet, the block will be stored as an orphan and be reprocessed once/if the parent arrives.
 
 #### Rejection
 If the signatures are invalid, the block is ignored and the node is considered byzantine.
@@ -113,6 +114,7 @@ Each chain has its own genesis block, created by the first user. Both are broadc
 ```json
 {
     "previous_hash": null,
+    "claim_hash": string,               
     "hash": string,
     "issuer": 'genesis',
     "lender": {creator_address},
@@ -125,6 +127,7 @@ Each chain has its own genesis block, created by the first user. Both are broadc
 ```
 
 When instantiating a node, by default it will ask for a copy of both chains from the peers.
+Note that creating the chains follows the same order as any other blocks. Claim Genesis -> Debt Genesis pointing to that claim.
 
 ### Peer Discovery
 A node connects to **seed nodes** — a set of known addresses composed of long-running servers and random active nodes from previous sessions.

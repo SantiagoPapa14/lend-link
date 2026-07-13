@@ -10,6 +10,17 @@ pub type Address = VerifyingKey;
 pub enum Issuer {
     Borrower,
     Lender,
+    Genesis,
+}
+
+impl Issuer {
+    pub fn to_string(&self) -> String {
+        match self {
+            Issuer::Lender => String::from("Lender"),
+            Issuer::Borrower => String::from("Borrower"),
+            Issuer::Genesis => String::from("Genesis"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -44,6 +55,13 @@ impl ClaimBlock {
         let signer = match self.issuer {
             Issuer::Lender => self.lender,
             Issuer::Borrower => self.borrower,
+            Issuer::Genesis => {
+                if self.lender == self.borrower {
+                    self.lender
+                } else {
+                    return false;
+                }
+            }
         };
 
         let Some(signature) = self.issuer_signature.as_ref() else {

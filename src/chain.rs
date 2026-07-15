@@ -87,10 +87,7 @@ impl ClaimChain {
                         .insert(claim.previous_hash.clone().unwrap(), to_append);
                 }
 
-                let res = save(&claim);
-                if res.is_err() {
-                    return Err("Failed to save claim".to_string());
-                }
+                save(&claim)?;
                 return Ok(());
             }
 
@@ -105,10 +102,7 @@ impl ClaimChain {
             self.links.insert(claim_hash.clone(), link);
             self.reprocess_orphans_by_parent(claim_hash);
 
-            let res = save(&claim);
-            if res.is_err() {
-                return Err("Failed to save claim".to_string());
-            }
+            save(&claim)?;
             Ok(())
         } else {
             if !claim.validate() {
@@ -125,10 +119,7 @@ impl ClaimChain {
                 children: Vec::new(),
             };
             self.links.insert(claim_hash.clone(), link);
-            let res = save(&claim);
-            if res.is_err() {
-                return Err("Failed to save claim".to_string());
-            }
+            save(&claim)?;
             Ok(())
         }
     }

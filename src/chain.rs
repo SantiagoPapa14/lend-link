@@ -87,7 +87,7 @@ impl ClaimChain {
                         .insert(claim.previous_hash.clone().unwrap(), to_append);
                 }
 
-                save(&claim)?;
+                save(&claim, "orphan".to_string())?;
                 return Ok(());
             }
 
@@ -102,7 +102,7 @@ impl ClaimChain {
             self.links.insert(claim_hash.clone(), link);
             self.reprocess_orphans_by_parent(claim_hash);
 
-            save(&claim)?;
+            save(&claim, self.genesis.clone().unwrap())?;
             Ok(())
         } else {
             if !claim.validate() {
@@ -119,7 +119,7 @@ impl ClaimChain {
                 children: Vec::new(),
             };
             self.links.insert(claim_hash.clone(), link);
-            save(&claim)?;
+            save(&claim, self.genesis.clone().unwrap())?;
             Ok(())
         }
     }

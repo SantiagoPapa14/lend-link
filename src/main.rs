@@ -1,6 +1,6 @@
 mod block;
 mod chain;
 mod crypto;
-mod data;
+mod storage;
 
 fn main() {}

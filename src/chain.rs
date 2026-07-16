@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::block::{ClaimBlock, Hash};
-use crate::data::save;
+use crate::{
+    block::{ClaimBlock, Hash},
+    storage::BlockStorage,
+};
 
 #[derive(Serialize, Deserialize)]
 pub struct ChainLink {
@@ -12,18 +14,22 @@ pub struct ChainLink {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ClaimChain {
+pub struct ClaimChain<T: BlockStorage> {
     pub links: HashMap<Hash, ChainLink>,
     pub genesis: Option<Hash>,
     pub orphans_by_parent: HashMap<Hash, Vec<ClaimBlock>>,
+
+    #[serde(skip)]
+    storage: T,
 }
 
-impl ClaimChain {
-    pub fn new() -> ClaimChain {
+impl<T: BlockStorage> ClaimChain<T> {
+    pub fn new(block_storage: T) -> ClaimChain<T> {
         ClaimChain {
             links: HashMap::new(),
             genesis: None,
             orphans_by_parent: HashMap::new(),
+            storage: block_storage,
         }
     }
 
@@ -51,12 +57,13 @@ impl ClaimChain {
         return Ok(&link.block);
     }
 
-    fn reprocess_orphans_by_parent(&mut self, parent: Hash) {
+    fn reprocess_orphans_by_parent(&mut self, parent: Hash) -> Result<(), String> {
         if let Some(claims) = self.orphans_by_parent.remove(&parent) {
             for claim in claims {
-                let _ = self.add_claim(claim);
+                let _ = self.add_claim(claim)?;
             }
         }
+        Ok(())
     }
 
     pub fn add_claim(&mut self, claim: ClaimBlock) -> Result<(), String> {
@@ -87,7 +94,7 @@ impl ClaimChain {
                         .insert(claim.previous_hash.clone().unwrap(), to_append);
                 }
 
-                save(&claim, "orphan".to_string())?;
+                self.storage.save(&claim, "orphan".to_string())?;
                 return Ok(());
             }
 
@@ -100,9 +107,8 @@ impl ClaimChain {
                 children: Vec::new(),
             };
             self.links.insert(claim_hash.clone(), link);
-            self.reprocess_orphans_by_parent(claim_hash);
-
-            save(&claim, self.genesis.clone().unwrap())?;
+            self.storage.save(&claim, self.genesis.clone().unwrap())?;
+            self.reprocess_orphans_by_parent(claim_hash)?;
             Ok(())
         } else {
             if !claim.validate() {
@@ -119,7 +125,7 @@ impl ClaimChain {
                 children: Vec::new(),
             };
             self.links.insert(claim_hash.clone(), link);
-            save(&claim, self.genesis.clone().unwrap())?;
+            self.storage.save(&claim, self.genesis.clone().unwrap())?;
             Ok(())
         }
     }
@@ -127,13 +133,68 @@ impl ClaimChain {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        cell::{Cell, RefCell},
+        collections::HashMap,
+    };
+
     use crate::{
-        block::{Address, ClaimBlock, Issuer},
+        block::{Address, ClaimBlock, Hash, Issuer},
         crypto,
+        storage::{BlockStorage, MemoryStorage},
     };
     use ed25519_dalek::SigningKey;
 
     use super::ClaimChain;
+
+    struct RecordingStorage {
+        chain_ids: RefCell<HashMap<Hash, Hash>>,
+    }
+
+    impl BlockStorage for RecordingStorage {
+        fn init() -> Result<Self, String> {
+            Ok(Self {
+                chain_ids: RefCell::new(HashMap::new()),
+            })
+        }
+
+        fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String> {
+            self.chain_ids
+                .borrow_mut()
+                .insert(claim.hash.clone(), chain_id);
+            Ok(())
+        }
+    }
+
+    struct FailOnSaveStorage {
+        save_count: Cell<usize>,
+        fail_on: usize,
+    }
+
+    impl BlockStorage for FailOnSaveStorage {
+        fn init() -> Result<Self, String> {
+            Ok(Self {
+                save_count: Cell::new(0),
+                fail_on: usize::MAX,
+            })
+        }
+
+        fn save(&self, _claim: &ClaimBlock, _chain_id: Hash) -> Result<(), String> {
+            let next = self.save_count.get() + 1;
+            self.save_count.set(next);
+
+            if next == self.fail_on {
+                Err("injected storage failure".to_string())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn new_chain() -> ClaimChain<MemoryStorage> {
+        let storage = MemoryStorage::init().expect("in-memory storage should initialize");
+        ClaimChain::new(storage)
+    }
 
     fn signed_claim(
         previous_hash: Option<String>,
@@ -172,14 +233,14 @@ mod tests {
 
     #[test]
     fn empty_chain_has_no_tip() {
-        let chain = ClaimChain::new();
+        let chain = new_chain();
 
         assert!(chain.get_tip().is_err());
     }
 
     #[test]
     fn first_valid_claim_is_accepted() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
         let claim = signed_claim(
@@ -199,7 +260,7 @@ mod tests {
 
     #[test]
     fn orphan_claim_is_indexed_by_its_missing_parent() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -241,7 +302,7 @@ mod tests {
 
     #[test]
     fn second_valid_claim_is_accepted() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -273,7 +334,7 @@ mod tests {
 
     #[test]
     fn non_genesis_claim_without_previous_hash_is_rejected_without_panicking() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -304,7 +365,7 @@ mod tests {
 
     #[test]
     fn tip_of_single_chain_is_the_only_leaf() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -338,7 +399,7 @@ mod tests {
 
     #[test]
     fn single_genesis_chain_tip_is_genesis() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -360,7 +421,7 @@ mod tests {
 
     #[test]
     fn tip_chooses_deeper_leaf_over_shallower_leaf() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -406,7 +467,7 @@ mod tests {
 
     #[test]
     fn tip_breaks_ties_by_smallest_hash() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -456,7 +517,7 @@ mod tests {
 
     #[test]
     fn forks_preserve_both_children_of_the_same_parent() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -511,7 +572,7 @@ mod tests {
 
     #[test]
     fn orphan_is_attached_after_its_parent_arrives() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -569,7 +630,7 @@ mod tests {
 
     #[test]
     fn orphan_chain_resolves_in_sequence_when_parent_unlocks_child() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -618,7 +679,7 @@ mod tests {
             .or_default()
             .push(grandchild.clone());
 
-        chain.reprocess_orphans_by_parent(genesis_hash.clone());
+        let _ = chain.reprocess_orphans_by_parent(genesis_hash.clone());
 
         assert!(chain.links.contains_key(&child_hash));
         assert!(
@@ -631,7 +692,7 @@ mod tests {
 
     #[test]
     fn forked_orphans_with_same_parent_are_all_resolved_when_parent_arrives() {
-        let mut chain = ClaimChain::new();
+        let mut chain = new_chain();
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -701,5 +762,126 @@ mod tests {
         let parent_link = chain.links.get(&genesis_hash).expect("genesis not found");
         assert_eq!(parent_link.children.len(), 1);
         assert!(parent_link.children.contains(&parent_hash));
+    }
+
+    #[test]
+    fn resolving_an_orphan_updates_its_persisted_chain_id() {
+        let storage = RecordingStorage::init().unwrap();
+        let mut chain = ClaimChain::new(storage);
+        let (lender_private, lender_public) = crypto::generate_keys();
+        let (borrower_private, borrower_public) = crypto::generate_keys();
+
+        let genesis = signed_claim(
+            None,
+            Issuer::Borrower,
+            10,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let genesis_hash = genesis.hash.clone();
+        chain.add_claim(genesis).unwrap();
+
+        let parent = signed_claim(
+            Some(genesis_hash.clone()),
+            Issuer::Lender,
+            15,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let parent_hash = parent.hash.clone();
+        let orphan = signed_claim(
+            Some(parent_hash),
+            Issuer::Borrower,
+            20,
+            &lender_private,
+            lender_public,
+            &borrower_private,
+            borrower_public,
+        );
+        let orphan_hash = orphan.hash.clone();
+
+        chain.add_claim(orphan).unwrap();
+        assert_eq!(
+            chain.storage.chain_ids.borrow().get(&orphan_hash),
+            Some(&"orphan".to_string())
+        );
+
+        chain.add_claim(parent).unwrap();
+
+        assert!(chain.links.contains_key(&orphan_hash));
+        assert_eq!(
+            chain.storage.chain_ids.borrow().get(&orphan_hash),
+            Some(&genesis_hash)
+        );
+    }
+
+    #[test]
+    fn failed_orphan_reprocessing_keeps_unprocessed_siblings_queued() {
+        let storage = FailOnSaveStorage {
+            save_count: Cell::new(0),
+            fail_on: 5,
+        };
+        let mut chain = ClaimChain::new(storage);
+        let (lender_private, lender_public) = crypto::generate_keys();
+        let (borrower_private, borrower_public) = crypto::generate_keys();
+
+        let genesis = signed_claim(
+            None,
+            Issuer::Borrower,
+            10,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let genesis_hash = genesis.hash.clone();
+        chain.add_claim(genesis).unwrap();
+
+        let parent = signed_claim(
+            Some(genesis_hash),
+            Issuer::Lender,
+            15,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let parent_hash = parent.hash.clone();
+
+        let first_orphan = signed_claim(
+            Some(parent_hash.clone()),
+            Issuer::Borrower,
+            20,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let second_orphan = signed_claim(
+            Some(parent_hash.clone()),
+            Issuer::Lender,
+            25,
+            &lender_private,
+            lender_public,
+            &borrower_private,
+            borrower_public,
+        );
+        let second_orphan_hash = second_orphan.hash.clone();
+
+        chain.add_claim(first_orphan).unwrap();
+        chain.add_claim(second_orphan).unwrap();
+
+        assert!(chain.add_claim(parent).is_err());
+        assert!(
+            chain
+                .orphans_by_parent
+                .get(&parent_hash)
+                .is_some_and(|claims| claims.iter().any(|claim| claim.hash == second_orphan_hash)),
+            "an orphan not yet processed should remain queued after its sibling fails"
+        );
     }
 }

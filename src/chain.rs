@@ -58,11 +58,25 @@ impl<T: BlockStorage> ClaimChain<T> {
     }
 
     fn reprocess_orphans_by_parent(&mut self, parent: Hash) -> Result<(), String> {
-        if let Some(claims) = self.orphans_by_parent.remove(&parent) {
-            for claim in claims {
-                let _ = self.add_claim(claim)?;
+        let Some(claims) = self.orphans_by_parent.remove(&parent) else {
+            return Ok(());
+        };
+
+        let mut remaining_claims = Vec::new();
+
+        for claim in claims {
+            if self.add_claim(claim.clone()).is_err() {
+                remaining_claims.push(claim);
             }
         }
+
+        if !remaining_claims.is_empty() {
+            self.orphans_by_parent
+                .entry(parent)
+                .or_default()
+                .extend(remaining_claims);
+        }
+
         Ok(())
     }
 
@@ -823,7 +837,7 @@ mod tests {
     fn failed_orphan_reprocessing_keeps_unprocessed_siblings_queued() {
         let storage = FailOnSaveStorage {
             save_count: Cell::new(0),
-            fail_on: 5,
+            fail_on: 6,
         };
         let mut chain = ClaimChain::new(storage);
         let (lender_private, lender_public) = crypto::generate_keys();
@@ -875,7 +889,7 @@ mod tests {
         chain.add_claim(first_orphan).unwrap();
         chain.add_claim(second_orphan).unwrap();
 
-        assert!(chain.add_claim(parent).is_err());
+        assert!(chain.add_claim(parent).is_ok());
         assert!(
             chain
                 .orphans_by_parent

@@ -1,4 +1,5 @@
 use ed25519_dalek::{Signature, VerifyingKey};
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto;
@@ -19,6 +20,17 @@ impl Issuer {
             Issuer::Lender => String::from("Lender"),
             Issuer::Borrower => String::from("Borrower"),
             Issuer::Genesis => String::from("Genesis"),
+        }
+    }
+}
+
+impl FromSql for Issuer {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "Lender" => Ok(Issuer::Lender),
+            "Borrower" => Ok(Issuer::Borrower),
+            "Genesis" => Ok(Issuer::Genesis),
+            _ => Err(FromSqlError::InvalidType),
         }
     }
 }

@@ -178,6 +178,10 @@ mod tests {
                 .insert(claim.hash.clone(), chain_id);
             Ok(())
         }
+
+        fn load(&self) -> Result<Vec<ClaimBlock>, String> {
+            Ok(Vec::new())
+        }
     }
 
     struct FailOnSaveStorage {
@@ -202,6 +206,10 @@ mod tests {
             } else {
                 Ok(())
             }
+        }
+
+        fn load(&self) -> Result<Vec<ClaimBlock>, String> {
+            Ok(Vec::new())
         }
     }
 

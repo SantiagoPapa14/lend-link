@@ -143,6 +143,21 @@ impl<T: BlockStorage> ClaimChain<T> {
             Ok(())
         }
     }
+
+    pub fn index_from_storage(&mut self) -> Result<(), String> {
+        let genesis = self.storage.get_genesis()?;
+        let genesis_hash = genesis.hash.clone();
+        self.add_claim(genesis)?;
+
+        let claims = self.storage.load()?;
+        for claim in claims {
+            if claim.hash == genesis_hash {
+                continue;
+            }
+            self.add_claim(claim)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +197,10 @@ mod tests {
         fn load(&self) -> Result<Vec<ClaimBlock>, String> {
             Ok(Vec::new())
         }
+
+        fn get_genesis(&self) -> Result<ClaimBlock, String> {
+            Err("genesis not available in recording storage".to_string())
+        }
     }
 
     struct FailOnSaveStorage {
@@ -210,6 +229,36 @@ mod tests {
 
         fn load(&self) -> Result<Vec<ClaimBlock>, String> {
             Ok(Vec::new())
+        }
+
+        fn get_genesis(&self) -> Result<ClaimBlock, String> {
+            Err("genesis not available in fail-on-save storage".to_string())
+        }
+    }
+
+    struct PreloadedStorage {
+        claims: Vec<ClaimBlock>,
+    }
+
+    impl BlockStorage for PreloadedStorage {
+        fn init() -> Result<Self, String> {
+            Ok(Self { claims: Vec::new() })
+        }
+
+        fn save(&self, _claim: &ClaimBlock, _chain_id: Hash) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn load(&self) -> Result<Vec<ClaimBlock>, String> {
+            Ok(self.claims.clone())
+        }
+
+        fn get_genesis(&self) -> Result<ClaimBlock, String> {
+            self.claims
+                .iter()
+                .find(|claim| claim.previous_hash.is_none())
+                .cloned()
+                .ok_or_else(|| "genesis not found".to_string())
         }
     }
 
@@ -905,5 +954,123 @@ mod tests {
                 .is_some_and(|claims| claims.iter().any(|claim| claim.hash == second_orphan_hash)),
             "an orphan not yet processed should remain queued after its sibling fails"
         );
+    }
+
+    fn preloaded_chain(claims: Vec<ClaimBlock>) -> ClaimChain<PreloadedStorage> {
+        ClaimChain::new(PreloadedStorage { claims })
+    }
+
+    #[test]
+    fn index_from_storage_rebuilds_a_single_genesis_block() {
+        let (lender_private, lender_public) = crypto::generate_keys();
+        let (borrower_private, borrower_public) = crypto::generate_keys();
+        let genesis = signed_claim(
+            None,
+            Issuer::Borrower,
+            10,
+            &lender_private,
+            lender_public,
+            &borrower_private,
+            borrower_public,
+        );
+        let genesis_hash = genesis.hash.clone();
+
+        let mut chain = preloaded_chain(vec![genesis]);
+        assert!(chain.index_from_storage().is_ok());
+
+        assert_eq!(chain.genesis.as_ref(), Some(&genesis_hash));
+        assert_eq!(chain.links.len(), 1);
+        assert_eq!(chain.get_tip().unwrap().hash, genesis_hash);
+    }
+
+    #[test]
+    fn index_from_storage_rebuilds_a_linear_chain() {
+        let (lender_private, lender_public) = crypto::generate_keys();
+        let (borrower_private, borrower_public) = crypto::generate_keys();
+
+        let genesis = signed_claim(
+            None,
+            Issuer::Borrower,
+            10,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let genesis_hash = genesis.hash.clone();
+        let child = signed_claim(
+            Some(genesis_hash.clone()),
+            Issuer::Lender,
+            15,
+            &lender_private,
+            lender_public,
+            &borrower_private,
+            borrower_public,
+        );
+        let child_hash = child.hash.clone();
+
+        let mut chain = preloaded_chain(vec![genesis, child]);
+        assert!(chain.index_from_storage().is_ok());
+
+        assert_eq!(chain.genesis.as_ref(), Some(&genesis_hash));
+        assert_eq!(chain.links.len(), 2);
+        assert_eq!(
+            chain
+                .links
+                .get(&genesis_hash)
+                .expect("genesis link should exist")
+                .children,
+            vec![child_hash.clone()]
+        );
+        assert_eq!(chain.get_tip().unwrap().hash, child_hash);
+    }
+
+    #[test]
+    fn index_from_storage_rebuilds_orphans_loaded_before_their_parents() {
+        let (lender_private, lender_public) = crypto::generate_keys();
+        let (borrower_private, borrower_public) = crypto::generate_keys();
+
+        let genesis = signed_claim(
+            None,
+            Issuer::Borrower,
+            10,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let genesis_hash = genesis.hash.clone();
+        let parent = signed_claim(
+            Some(genesis_hash.clone()),
+            Issuer::Lender,
+            15,
+            &lender_private,
+            lender_public.clone(),
+            &borrower_private,
+            borrower_public.clone(),
+        );
+        let parent_hash = parent.hash.clone();
+        let orphan = signed_claim(
+            Some(parent_hash.clone()),
+            Issuer::Borrower,
+            20,
+            &lender_private,
+            lender_public,
+            &borrower_private,
+            borrower_public,
+        );
+        let orphan_hash = orphan.hash.clone();
+
+        let mut chain = preloaded_chain(vec![orphan, parent, genesis]);
+        assert!(chain.index_from_storage().is_ok());
+
+        assert_eq!(chain.genesis.as_ref(), Some(&genesis_hash));
+        assert_eq!(chain.links.len(), 3);
+        assert!(chain.links.contains_key(&orphan_hash));
+        assert!(
+            chain.orphans_by_parent.get(&parent_hash).is_none(),
+            "orphan queue should be empty once the parent is indexed"
+        );
+        assert_eq!(chain.get_tip().unwrap().hash, orphan_hash);
     }
 }

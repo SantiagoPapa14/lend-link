@@ -25,3 +25,9 @@
 - Added a minimal SQLite save path for accepted claims.
 - Stored validated claim blocks in a local database.
 - Wired persistence into claim insertion so accepted claims are recorded.
+
+### Quest 5: Rebuild The Claim Chain From Storage
+- Added explicit SQLite path initialization for restart scenarios.
+- Added storage load tests for SQLite and in-memory backends.
+- Rebuilt `genesis`, `links`, `children`, and orphan queues from loaded blocks.
+- Verified reload behavior for genesis, linear chains, and orphan-before-parent cases.

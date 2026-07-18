@@ -1,64 +1,11 @@
 use rusqlite::Connection;
 
 use crate::{
-    block::{ClaimBlock, Hash, Issuer},
+    block::{ClaimBlock, Hash},
     crypto,
 };
 
-pub enum StorageType {
-    Sqlite,
-    Memory,
-}
-
-pub trait BlockStorage: Sized {
-    fn init() -> Result<Self, String>;
-    fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String>;
-    fn load(&self) -> Result<Vec<ClaimBlock>, String>;
-}
-
-pub struct SqliteStorage {
-    conn: Connection,
-}
-
-impl BlockStorage for SqliteStorage {
-    fn init() -> Result<SqliteStorage, String> {
-        let conn = init_db(StorageType::Sqlite).map_err(|e| e.to_string())?;
-        Ok(SqliteStorage { conn })
-    }
-    fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String> {
-        insert_block(&self.conn, claim, chain_id)
-    }
-    fn load(&self) -> Result<Vec<ClaimBlock>, String> {
-        return get_all_claims(&self.conn);
-    }
-}
-
-pub struct MemoryStorage {
-    conn: Connection,
-}
-
-impl BlockStorage for MemoryStorage {
-    fn init() -> Result<MemoryStorage, String> {
-        let conn = init_db(StorageType::Memory).map_err(|e| e.to_string())?;
-        Ok(MemoryStorage { conn })
-    }
-    fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String> {
-        insert_block(&self.conn, claim, chain_id)
-    }
-    fn load(&self) -> Result<Vec<ClaimBlock>, String> {
-        return get_all_claims(&self.conn);
-    }
-}
-
-fn init_db(storage_type: StorageType) -> Result<Connection, String> {
-    let conn = match storage_type {
-        StorageType::Sqlite => Connection::open("lendlink.db").map_err(|e| e.to_string())?,
-        StorageType::Memory => Connection::open_in_memory().map_err(|e| e.to_string())?,
-    };
-
-    let _ = conn
-        .execute(
-            "CREATE TABLE IF NOT EXISTS blocks (
+const INIT_QUERY: &str = "CREATE TABLE IF NOT EXISTS blocks (
             previous_hash TEXT,
             hash TEXT NOT NULL PRIMARY KEY,
             issuer TEXT NOT NULL,
@@ -68,14 +15,103 @@ fn init_db(storage_type: StorageType) -> Result<Connection, String> {
             issued_at TEXT NOT NULL,
             issuer_signature BLOB NOT NULL CHECK(length(issuer_signature) = 64),
             chain_id TEXT NOT NULL
-        );",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
+        );";
 
-    Ok(conn)
+const SELECT_GENESIS: &str = "SELECT * FROM blocks WHERE previous_hash IS NULL LIMIT 1;";
+
+//--- --- General --- ---
+
+pub trait BlockStorage: Sized {
+    fn init() -> Result<Self, String>;
+    fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String>;
+    fn load(&self) -> Result<Vec<ClaimBlock>, String>;
+    fn get_genesis(&self) -> Result<ClaimBlock, String>;
 }
 
+//--- --- SQLITE --- ---
+
+pub struct SqliteStorage {
+    conn: Connection,
+}
+
+impl SqliteStorage {
+    pub fn init_with_path(path: &str) -> Result<SqliteStorage, String> {
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        let _ = conn.execute(INIT_QUERY, []).map_err(|e| e.to_string())?;
+        Ok(SqliteStorage { conn })
+    }
+}
+
+impl BlockStorage for SqliteStorage {
+    fn init() -> Result<SqliteStorage, String> {
+        let store = SqliteStorage::init_with_path("lendlink.db")?;
+        Ok(store)
+    }
+    fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String> {
+        insert_block(&self.conn, claim, chain_id)
+    }
+    fn load(&self) -> Result<Vec<ClaimBlock>, String> {
+        return get_all_claims(&self.conn);
+    }
+    fn get_genesis(&self) -> Result<ClaimBlock, String> {
+        let block = self
+            .conn
+            .query_row(SELECT_GENESIS, [], |row| {
+                Ok(ClaimBlock {
+                    previous_hash: row.get(0).unwrap_or(None),
+                    hash: row.get(1)?,
+                    issuer: row.get(2)?,
+                    lender: crypto::read_verifying_key(row, 3)?,
+                    borrower: crypto::read_verifying_key(row, 4)?,
+                    amount: row.get(5)?,
+                    issued_at: row.get(6)?,
+                    issuer_signature: crypto::read_optional_signature(row, 7)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(block)
+    }
+}
+
+//--- --- MEMORY --- ---
+
+pub struct MemoryStorage {
+    conn: Connection,
+}
+
+impl BlockStorage for MemoryStorage {
+    fn init() -> Result<MemoryStorage, String> {
+        let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+        let _ = conn.execute(INIT_QUERY, []).map_err(|e| e.to_string())?;
+        Ok(MemoryStorage { conn })
+    }
+    fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String> {
+        insert_block(&self.conn, claim, chain_id)
+    }
+    fn load(&self) -> Result<Vec<ClaimBlock>, String> {
+        return get_all_claims(&self.conn);
+    }
+    fn get_genesis(&self) -> Result<ClaimBlock, String> {
+        let block = self
+            .conn
+            .query_row(SELECT_GENESIS, [], |row| {
+                Ok(ClaimBlock {
+                    previous_hash: row.get(0).unwrap_or(None),
+                    hash: row.get(1)?,
+                    issuer: row.get(2)?,
+                    lender: crypto::read_verifying_key(row, 3)?,
+                    borrower: crypto::read_verifying_key(row, 4)?,
+                    amount: row.get(5)?,
+                    issued_at: row.get(6)?,
+                    issuer_signature: crypto::read_optional_signature(row, 7)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(block)
+    }
+}
+
+//--- --- Rustqlite Auxiliary --- ---
 pub fn insert_block(conn: &Connection, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String> {
     let _ = conn
         .execute(
@@ -142,12 +178,18 @@ fn get_all_claims(conn: &Connection) -> Result<Vec<ClaimBlock>, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use crate::{
         block::{ClaimBlock, Issuer},
         crypto,
     };
 
-    use super::{BlockStorage, MemoryStorage, StorageType, init_db, insert_block};
+    use super::{BlockStorage, MemoryStorage, SqliteStorage, insert_block};
 
     fn stored_claim(
         hash: &str,
@@ -173,7 +215,9 @@ mod tests {
 
     #[test]
     fn inserting_an_existing_block_updates_its_chain_id() {
-        let conn = init_db(StorageType::Memory).unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(super::INIT_QUERY, []).unwrap();
+
         let (signing_key, lender) = crypto::generate_keys();
         let (_, borrower) = crypto::generate_keys();
         let signature = crypto::sign_message(&signing_key, b"stored claim");
@@ -200,6 +244,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(stored_chain_id, "genesis-hash");
+    }
+
+    fn sqlite_file_path(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        std::env::temp_dir().join(format!(
+            "lend-link-{}-{}-{}.db",
+            test_name,
+            std::process::id(),
+            unique
+        ))
+    }
+
+    #[test]
+    fn load_returns_saved_claims_from_sqlite_storage_path() {
+        let path = sqlite_file_path("load_returns_saved_claims_from_sqlite_storage_path");
+        let _ = fs::remove_file(&path);
+
+        let claim = stored_claim("claim-path", Some("genesis"), Issuer::Borrower, 12);
+
+        {
+            let storage = SqliteStorage::init_with_path(path.to_str().unwrap()).unwrap();
+            storage.save(&claim, "genesis-hash".to_string()).unwrap();
+        }
+
+        {
+            let storage = SqliteStorage::init_with_path(path.to_str().unwrap()).unwrap();
+            let loaded = storage.load().unwrap();
+
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].hash, claim.hash);
+            assert_eq!(loaded[0].previous_hash, claim.previous_hash);
+            assert_eq!(loaded[0].issuer.to_string(), claim.issuer.to_string());
+        }
+
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

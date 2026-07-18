@@ -163,6 +163,7 @@ mod tests {
     use std::{
         cell::{Cell, RefCell},
         collections::HashMap,
+        rc::Rc,
     };
 
     use crate::{
@@ -175,14 +176,24 @@ mod tests {
     use super::ClaimChain;
 
     struct RecordingStorage {
-        chain_ids: RefCell<HashMap<Hash, Hash>>,
+        chain_ids: Rc<RefCell<HashMap<Hash, Hash>>>,
+    }
+
+    impl RecordingStorage {
+        fn new() -> (Self, Rc<RefCell<HashMap<Hash, Hash>>>) {
+            let chain_ids = Rc::new(RefCell::new(HashMap::new()));
+            (
+                Self {
+                    chain_ids: Rc::clone(&chain_ids),
+                },
+                chain_ids,
+            )
+        }
     }
 
     impl BlockStorage for RecordingStorage {
         fn init() -> Result<Self, String> {
-            Ok(Self {
-                chain_ids: RefCell::new(HashMap::new()),
-            })
+            Ok(Self::new().0)
         }
 
         fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String> {
@@ -835,7 +846,7 @@ mod tests {
 
     #[test]
     fn resolving_an_orphan_updates_its_persisted_chain_id() {
-        let storage = RecordingStorage::init().unwrap();
+        let (storage, chain_ids) = RecordingStorage::new();
         let mut chain = ClaimChain::new(Box::new(storage));
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
@@ -875,16 +886,16 @@ mod tests {
 
         chain.add_claim(orphan).unwrap();
         assert_eq!(
-            chain.storage.chain_ids.borrow().get(&orphan_hash)?,
-            Some(&"orphan".to_string())
+            chain_ids.borrow().get(&orphan_hash).map(String::as_str),
+            Some("orphan")
         );
 
         chain.add_claim(parent).unwrap();
 
         assert!(chain.links.contains_key(&orphan_hash));
         assert_eq!(
-            chain.storage.chain_ids.borrow().get(&orphan_hash),
-            Some(&genesis_hash)
+            chain_ids.borrow().get(&orphan_hash).map(String::as_str),
+            Some(genesis_hash.as_str())
         );
     }
 
@@ -954,8 +965,8 @@ mod tests {
         );
     }
 
-    fn preloaded_chain(claims: Vec<ClaimBlock>) -> ClaimChain<PreloadedStorage> {
-        ClaimChain::new(PreloadedStorage { claims })
+    fn preloaded_chain(claims: Vec<ClaimBlock>) -> ClaimChain {
+        ClaimChain::new(Box::new(PreloadedStorage { claims }))
     }
 
     #[test]

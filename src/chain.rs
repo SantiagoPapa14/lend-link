@@ -13,18 +13,16 @@ pub struct ChainLink {
     pub children: Vec<Hash>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ClaimChain<T: BlockStorage> {
+pub struct ClaimChain {
     pub links: HashMap<Hash, ChainLink>,
     pub genesis: Option<Hash>,
     pub orphans_by_parent: HashMap<Hash, Vec<ClaimBlock>>,
 
-    #[serde(skip)]
-    storage: T,
+    storage: Box<dyn BlockStorage>,
 }
 
-impl<T: BlockStorage> ClaimChain<T> {
-    pub fn new(block_storage: T) -> ClaimChain<T> {
+impl ClaimChain {
+    pub fn new(block_storage: Box<dyn BlockStorage>) -> ClaimChain {
         ClaimChain {
             links: HashMap::new(),
             genesis: None,
@@ -262,9 +260,9 @@ mod tests {
         }
     }
 
-    fn new_chain() -> ClaimChain<MemoryStorage> {
+    fn new_chain() -> ClaimChain {
         let storage = MemoryStorage::init().expect("in-memory storage should initialize");
-        ClaimChain::new(storage)
+        ClaimChain::new(Box::new(storage))
     }
 
     fn signed_claim(
@@ -838,7 +836,7 @@ mod tests {
     #[test]
     fn resolving_an_orphan_updates_its_persisted_chain_id() {
         let storage = RecordingStorage::init().unwrap();
-        let mut chain = ClaimChain::new(storage);
+        let mut chain = ClaimChain::new(Box::new(storage));
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 
@@ -877,7 +875,7 @@ mod tests {
 
         chain.add_claim(orphan).unwrap();
         assert_eq!(
-            chain.storage.chain_ids.borrow().get(&orphan_hash),
+            chain.storage.chain_ids.borrow().get(&orphan_hash)?,
             Some(&"orphan".to_string())
         );
 
@@ -896,7 +894,7 @@ mod tests {
             save_count: Cell::new(0),
             fail_on: 6,
         };
-        let mut chain = ClaimChain::new(storage);
+        let mut chain = ClaimChain::new(Box::new(storage));
         let (lender_private, lender_public) = crypto::generate_keys();
         let (borrower_private, borrower_public) = crypto::generate_keys();
 

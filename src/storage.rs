@@ -21,8 +21,10 @@ const SELECT_GENESIS: &str = "SELECT * FROM blocks WHERE previous_hash IS NULL L
 
 //--- --- General --- ---
 
-pub trait BlockStorage: Sized {
-    fn init() -> Result<Self, String>;
+pub trait BlockStorage {
+    fn init() -> Result<Self, String>
+    where
+        Self: Sized;
     fn save(&self, claim: &ClaimBlock, chain_id: Hash) -> Result<(), String>;
     fn load(&self) -> Result<Vec<ClaimBlock>, String>;
     fn get_genesis(&self) -> Result<ClaimBlock, String>;

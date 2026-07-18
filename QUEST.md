@@ -1,27 +1,27 @@
 # QUEST
 
-## Completed Quest: Rebuild The Claim Chain From Storage
+## Active Quest: Raise The Node Shell
 
 Goal:
-- Make the claim chain survive a restart by rebuilding in-memory state from `BlockStorage::load()`.
+- Turn `main.rs` into a real launcher for the project by adding a basic CLI and startup flow.
 
 What already exists:
-- `BlockStorage` now exposes `load()`.
-- `MemoryStorage` and `SqliteStorage` can return saved claim blocks.
-- Storage round-trip tests already verify that saved claims can be read back.
+- Claim blocks, claim-chain storage, and reload logic.
+- A working persistence layer for claim data.
+- A campaign roadmap in `CAMPAIGN.md`.
 
 What remains:
-- First mission: make `SqliteStorage` accept an explicit database path.
-- Then add restart tests against a temp SQLite file so reload behavior can be verified cleanly.
-- Reconstruct `genesis`, `links`, `children`, and orphan tracking from loaded blocks.
-- Keep tip selection behavior unchanged after reload.
-- Current reload tests pass for genesis and a linear chain, but fail when an orphan is loaded before its parent.
+- Add CLI argument parsing.
+- Add a command or flag for starting a node.
+- Add a command or flag for initializing or loading storage.
+- Wire the existing claim-chain/storage pieces into startup.
+- Make startup failures readable instead of silent.
 
 Hints:
-- Start from the data already persisted in storage.
-- Rebuild in parent-first order if needed.
-- Use `MemoryStorage` for ordinary tests.
-- Use a temp SQLite file for restart tests.
+- Keep the first pass simple: one binary, a few flags, and one startup path.
+- Do not build networking yet unless the CLI shape forces it.
+- Focus on clear ownership of configuration before expanding features.
+- Think of this as building the inn at the edge of the hold before the roads.
 
 Status:
-- Completed. `SqliteStorage::init_with_path` exists, storage load tests are present, and `ClaimChain::index_from_storage()` rebuilds genesis, links, children, and orphan queues in the reload tests.
+- Active.
